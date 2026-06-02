@@ -1,0 +1,26 @@
+{
+  "app": "python app.py",
+  "context": {
+    "@aws-cdk/aws-s3:keepNotificationInImportedBucket": false,
+    "@aws-cdk/customresources:installLatestAwsSdkDefault": false,
+
+    "// ─── 必填参数 ──────────────────────────────────────────": "",
+    "notification_email": "your-alert@company.com",
+    "model_ids": [
+      "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    ],
+    "model_quotas": {
+      "anthropic.claude-3-5-sonnet-20241022-v2:0": 100000
+    },
+
+    "// ─── 可选参数（有默认值）─────────────────────────────────": "",
+    "input_token_avg_threshold": 50000,
+    "dashboard_name": "Bedrock-Operations",
+
+    "// ─── Invocation Logging（设为 false 则跳过）────────────": "",
+    "enable_invocation_logging": true,
+    "invocation_log_group_name": "/aws/bedrock/invocation-logs",
+    "invocation_log_retention_days": 90,
+    "invocation_s3_bucket_name": ""
+  }
+}
