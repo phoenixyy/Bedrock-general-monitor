@@ -52,13 +52,23 @@ aws sts get-caller-identity
 
 > 「检测到你当前 AWS CLI 默认 Region 是 `<检测值>`，本次监控要部署在哪个 Region？（如果你的 Bedrock 模型调用发生在别的 Region，请填那个 Region，不要用默认值）」
 
-**如果本次要监控的模型走 `bedrock-mantle` 端点**（GPT-5.5 等 openai-compatible 模型，见下方专门章节），**还需要额外核实该模型在目标 Region 是否真的支持 `bedrock-mantle`**——`aws bedrock list-foundation-models` 查不到这些模型，必须去对应模型卡片文档页的 "Regional Availability" 表核实（例如 GPT-5.5 目前只支持 `us-east-1` 和 `us-east-2` 的 In-Region 推理，Geo/Global 均不支持）。核实方式：
+**如果本次要监控的模型走 `bedrock-mantle` 端点**（GPT-5.4 / GPT-5.5 等 openai-compatible 模型，见下方专门章节），**还需要额外核实该模型在目标 Region 是否真的支持 `bedrock-mantle`**——`aws bedrock list-foundation-models` 查不到这些模型，必须去对应模型卡片文档页的 "Regional Availability" 表核实。**不同模型支持的 Region 范围不一样**，不能互相假设：
+
+| 模型 | Model ID | 支持 Region（In-Region，截至本文档编写时） |
+|---|---|---|
+| GPT-5.5 | `openai.gpt-5.5` | `us-east-1`、`us-east-2` |
+| GPT-5.4 | `openai.gpt-5.4` | `us-east-1`、`us-east-2`、`us-west-2`、`us-gov-west-1`（GovCloud） |
+
+两个模型都仅支持 In-Region 推理，Geo/Global Cross-Region 均不支持。核实方式：
 
 ```bash
-# 示例：GPT-5.5 的模型卡片文档
+# 示例：GPT-5.5 / GPT-5.4 的模型卡片文档
 # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
-# 查看 "Regional Availability" 表，确认目标 Region 在 In-Region 列是绿色勾
+# https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html
+# 查看各自的 "Regional Availability" 表，确认目标 Region 在 In-Region 列是绿色勾
 ```
+
+> 上表可能随 AWS 发布新 Region/新模型而变化，部署前建议跟进文档页重新确认一遍，不要凭记忆。
 
 > ⚠️ 如果目标 Region 不支持该模型的 bedrock-mantle 端点，告警会一直是 `INSUFFICIENT_DATA`，客户会误以为部署失败——一定要在部署前确认清楚，不要部署完再让客户自己排查。
 
@@ -135,7 +145,7 @@ aws cloudwatch list-metrics \
 
 ## ⚠️ 关于 BedrockMantle 端点（GPT-5.5 等 openai-compatible 模型必读）
 
-如果客户要监控的模型是通过 **`bedrock-mantle` 端点**调用的（Responses API / Chat Completions API / Anthropic Messages API，典型代表：`openai.gpt-5.5`），
+如果客户要监控的模型是通过 **`bedrock-mantle` 端点**调用的（Responses API / Chat Completions API / Anthropic Messages API，典型代表：`openai.gpt-5.5`、`openai.gpt-5.4`），
 **上面第 0～3 步的告警和 Dashboard（namespace `AWS/Bedrock`）对这些模型完全无效**，因为：
 
 - `bedrock-mantle` 发布指标到独立的 `AWS/BedrockMantle` namespace，`AWS/Bedrock` 下的告警/Dashboard 看不到任何数据
@@ -148,7 +158,7 @@ aws cloudwatch list-metrics \
 
 | # | 参数 | 说明 | 示例 |
 |---|------|------|------|
-| 1 | **要监控的 Mantle 模型 ID** | 对应 `mantle_model_ids`，可多个 | `["openai.gpt-5.5"]` |
+| 1 | **要监控的 Mantle 模型 ID** | 对应 `mantle_model_ids`，可多个，**一定要问到具体版号**，不要假设只有 GPT-5.5（目前已知 `openai.gpt-5.5`、`openai.gpt-5.4` 两个，可同时填多个） | `["openai.gpt-5.5", "openai.gpt-5.4"]` |
 | 2 | **告警接收邮箱** | 对应 `mantle_notification_email`；留空则复用 `notification_email` | `ops@company.com` |
 | 3 | **Project ID**（可选） | 若使用了 Bedrock Project，填对应 Project ID 可在 Dashboard 上看按 Project+Model 的逐请求 token 分布（p90）；不填则只看 Account/Model 级汇总 | `["proj-abc"]` |
 | 4 | **InferenceClientErrors 告警阈值** | 对应 `mantle_client_error_threshold`，默认 50（5 分钟窗口 Sum） | `50` |
@@ -169,7 +179,7 @@ aws cloudwatch list-metrics \
 ```json
 {
   "context": {
-    "mantle_model_ids": ["openai.gpt-5.5"],
+    "mantle_model_ids": ["openai.gpt-5.5", "openai.gpt-5.4"],
     "mantle_project_ids": [],
     "mantle_notification_email": "ops@company.com",
     "mantle_client_error_threshold": 50,
@@ -178,6 +188,8 @@ aws cloudwatch list-metrics \
   }
 }
 ```
+
+> 同时填多个 Mantle 模型时，告警和 Dashboard 会按模型分别生成，互不影响。但要注意不同模型支持的 Region 可能不一样（见上方 0-B 表格），若其中一个模型在目标 Region 不支持，对应告警会一直 `INSUFFICIENT_DATA`，部署前请逐个核实。
 
 > `mantle_model_ids` 留空（`[]`）则 `BedrockMantleMonitoringStack` **不会被部署**，与原有 runtime 监控 Stack 完全独立，互不影响，`cdk deploy` 会自动跳过。
 
