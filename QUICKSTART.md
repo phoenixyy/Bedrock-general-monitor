@@ -117,6 +117,56 @@ aws cloudwatch list-metrics \
 
 ---
 
+## ⚠️ 关于 BedrockMantle 端点（GPT-5.5 等 openai-compatible 模型必读）
+
+如果客户要监控的模型是通过 **`bedrock-mantle` 端点**调用的（Responses API / Chat Completions API / Anthropic Messages API，典型代表：`openai.gpt-5.5`），
+**上面第 0～3 步的告警和 Dashboard（namespace `AWS/Bedrock`）对这些模型完全无效**，因为：
+
+- `bedrock-mantle` 发布指标到独立的 `AWS/BedrockMantle` namespace，`AWS/Bedrock` 下的告警/Dashboard 看不到任何数据
+- 指标名称也不同：`Inferences`（非 `Invocations`）、`InferenceClientErrors`（非 `InvocationClientErrors`）、`TotalInputTokens`/`TotalOutputTokens`（非 `InputTokenCount`/`OutputTokenCount`）
+- **目前 BedrockMantle 还没有发布延迟类指标**（无 `InvocationLatency`/`TimeToFirstToken` 等效指标），也**没有 ServerErrors/Throttles 指标**——这不是本项目的缺陷，是 AWS 当前的产品限制，如实告知客户即可，不要试图伪造这些告警。
+
+**判断方式**：先确认客户要监控的模型是否走 `bedrock-mantle` 端点（可查模型卡片的 "Endpoints supported" 一栏，或看调用代码用的是 Responses API / Chat Completions API）。是的话，走 Step 1-M 收集 Mantle 参数；不是的话跳过本节。
+
+### Step 1-M：向用户收集 BedrockMantle 监控参数
+
+| # | 参数 | 说明 | 示例 |
+|---|------|------|------|
+| 1 | **要监控的 Mantle 模型 ID** | 对应 `mantle_model_ids`，可多个 | `["openai.gpt-5.5"]` |
+| 2 | **告警接收邮箱** | 对应 `mantle_notification_email`；留空则复用 `notification_email` | `ops@company.com` |
+| 3 | **Project ID**（可选） | 若使用了 Bedrock Project，填对应 Project ID 可在 Dashboard 上看按 Project+Model 的逐请求 token 分布（p90）；不填则只看 Account/Model 级汇总 | `["proj-abc"]` |
+| 4 | **InferenceClientErrors 告警阈值** | 对应 `mantle_client_error_threshold`，默认 50（5 分钟窗口 Sum） | `50` |
+| 5 | **是否开启“调用掉零”告警**（可选） | 对应 `mantle_enable_zero_traffic_alarm`，默认 `false`。**只在客户确认该模型应该有持续稳定调用时才建议开启**，否则低频调用场景会持续误报 | `false` |
+
+**确认实际 Model 维度值**（与 runtime 类似，先跑一遍确认，避免指标为空）：
+
+```bash
+aws cloudwatch list-metrics \
+  --namespace AWS/BedrockMantle \
+  --region $(aws configure get region) \
+  --query 'Metrics[].Dimensions[?Name==`Model`].Value' \
+  --output text | tr '\t' '\n' | sort -u
+```
+
+### Step 2-M：更新 cdk.json（新增字段，不影响原有 runtime 字段）
+
+```json
+{
+  "context": {
+    "mantle_model_ids": ["openai.gpt-5.5"],
+    "mantle_project_ids": [],
+    "mantle_notification_email": "ops@company.com",
+    "mantle_client_error_threshold": 50,
+    "mantle_dashboard_name": "Bedrock-Mantle-Operations",
+    "mantle_enable_zero_traffic_alarm": false
+  }
+}
+```
+
+> `mantle_model_ids` 留空（`[]`）则 `BedrockMantleMonitoringStack` **不会被部署**，与原有 runtime 监控 Stack 完全独立，互不影响，`cdk deploy` 会自动跳过。
+
+---
+
 ## Step 1：向用户收集以下信息
 
 请逐一询问用户（中文），并在收集完毕后**一次性确认**再执行操作：
@@ -168,16 +218,19 @@ REGION=$(aws configure get region || echo "ap-northeast-1")
 cdk bootstrap aws://$ACCOUNT_ID/$REGION
 
 # 部署（如用户有多个 Profile，在此加 --profile <name>）
-cdk deploy --context account=$ACCOUNT_ID
+# 若 cdk.json 中配置了 mantle_model_ids，cdk deploy 会一并部署 BedrockMonitoringStack 和 BedrockMantleMonitoringStack 两个 Stack；
+# 未配置则只部署 BedrockMonitoringStack。
+cdk deploy --all --context account=$ACCOUNT_ID
 ```
 
 ---
 
 ## Step 4：部署完成后告知用户
 
-1. **确认订阅邮件**：收件箱找到 "AWS Notification - Subscription Confirmation"，**必须点击确认**才能收到告警。
-2. **查看 Dashboard**：部署输出中的 `DashboardUrl` 直接点击访问。
-3. **验证告警**：CloudWatch → Alarms，状态为 `OK` 或 `Insufficient data` 均正常（有 Bedrock 调用后才产生数据）。
+1. **确认订阅邮件**：收件箱找到 "AWS Notification - Subscription Confirmation"，**必须点击确认**才能收到告警。如部署了 BedrockMantleMonitoringStack，会收到两封确认邮件（runtime + mantle 两个 SNS Topic各自一封）。
+2. **查看 Dashboard**：部署输出中的 `DashboardUrl`（runtime）和 `MantleDashboardUrl`（Mantle）分别直接访问。
+3. **验证告警**：CloudWatch → Alarms，状态为 `OK` 或 `Insufficient data` 均正常（有对应调用后才产生数据）。
+   - 若部署了 Mantle，注意 BedrockMantle 目前没有延迟类告警，**只会有 InferenceClientErrors（可选加 “调用掉零”）两类**，不要向客户承诺延迟/ServerError 告警。
 
 ---
 
