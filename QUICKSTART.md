@@ -46,12 +46,28 @@ aws sts get-caller-identity
 - `bedrock:PutModelInvocationLoggingConfiguration`
 - `cloudformation:*`, `ssm:*`（CDK 部署所需）
 
-### 0-B 检查现有环境（避免冲突）
+### 0-B 确认部署 Region（必须显式跟用户确认，不要只用检测到的默认值默默部署）
 
-运行以下命令检查现有资源，**根据结果调整部署策略**：
+`aws configure get region` 检测到的值**只是当前 CLI 默认值，不代表用户想部署在这个 Region**。必须像收集邮箱/model_ids 一样，明确问用户：
+
+> 「检测到你当前 AWS CLI 默认 Region 是 `<检测值>`，本次监控要部署在哪个 Region？（如果你的 Bedrock 模型调用发生在别的 Region，请填那个 Region，不要用默认值）」
+
+**如果本次要监控的模型走 `bedrock-mantle` 端点**（GPT-5.5 等 openai-compatible 模型，见下方专门章节），**还需要额外核实该模型在目标 Region 是否真的支持 `bedrock-mantle`**——`aws bedrock list-foundation-models` 查不到这些模型，必须去对应模型卡片文档页的 "Regional Availability" 表核实（例如 GPT-5.5 目前只支持 `us-east-1` 和 `us-east-2` 的 In-Region 推理，Geo/Global 均不支持）。核实方式：
 
 ```bash
-REGION=$(aws configure get region || echo "ap-northeast-1")
+# 示例：GPT-5.5 的模型卡片文档
+# https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
+# 查看 "Regional Availability" 表，确认目标 Region 在 In-Region 列是绿色勾
+```
+
+> ⚠️ 如果目标 Region 不支持该模型的 bedrock-mantle 端点，告警会一直是 `INSUFFICIENT_DATA`，客户会误以为部署失败——一定要在部署前确认清楚，不要部署完再让客户自己排查。
+
+### 0-C 检查现有环境（避免冲突）
+
+运行以下命令检查现有资源，**根据结果调整部署策略**（`$REGION` 使用 0-B 中已跟用户确认过的值，不要重新用默认值）：
+
+```bash
+REGION="<0-B 中确认的 Region>"
 
 # 1. 检查 Bedrock Invocation Logging 是否已启用
 echo "=== Bedrock Invocation Logging ==="
@@ -103,12 +119,12 @@ aws cloudformation describe-stacks \
 | Global / Cross-Region Inference | `global.anthropic.claude-sonnet-4-6` |
 | Provisioned Throughput | `arn:aws:bedrock:...:provisioned-model/...` |
 
-**如何确认实际 ModelId**：先让用户运行一条命令，展示当前账号下实际出现的 ModelId：
+**如何确认实际 ModelId**：先让用户运行一条命令，展示当前账号下实际出现的 ModelId（`$REGION` 用 0-B 中确认过的部署 Region，不要用当前 CLI 默认值，两者可能不一致）：
 
 ```bash
 aws cloudwatch list-metrics \
   --namespace AWS/Bedrock \
-  --region $(aws configure get region) \
+  --region $REGION \
   --query 'Metrics[].Dimensions[?Name==`ModelId`].Value' \
   --output text | tr '\t' '\n' | sort -u
 ```
@@ -138,12 +154,12 @@ aws cloudwatch list-metrics \
 | 4 | **InferenceClientErrors 告警阈值** | 对应 `mantle_client_error_threshold`，默认 50（5 分钟窗口 Sum） | `50` |
 | 5 | **是否开启“调用掉零”告警**（可选） | 对应 `mantle_enable_zero_traffic_alarm`，默认 `false`。**只在客户确认该模型应该有持续稳定调用时才建议开启**，否则低频调用场景会持续误报 | `false` |
 
-**确认实际 Model 维度值**（与 runtime 类似，先跑一遍确认，避免指标为空）：
+**确认实际 Model 维度值**（与 runtime 类似，先跑一遍确认，避免指标为空；`$REGION` 仍用 0-B 确认过的值）：
 
 ```bash
 aws cloudwatch list-metrics \
   --namespace AWS/BedrockMantle \
-  --region $(aws configure get region) \
+  --region $REGION \
   --query 'Metrics[].Dimensions[?Name==`Model`].Value' \
   --output text | tr '\t' '\n' | sort -u
 ```
@@ -176,7 +192,7 @@ aws cloudwatch list-metrics \
 | 1 | **告警接收邮箱** | 告警触发时发送到哪个邮箱 | `ops@company.com` |
 | 2 | **要监控的模型 ID** | 可以多个，来自 Amazon Bedrock 控制台的 Model ID | `anthropic.claude-3-5-sonnet-20241022-v2:0` |
 | 3 | **各模型 TPM 配额** | 每个模型单独配置，在 AWS Service Quotas 中查询，搜索模型名称 + "tokens per minute" | `{"model-id": 100000}` |
-| 4 | **是否启用 Invocation Logging** | 推荐开启（Step 0-B 未检测到冲突时）；已有冲突则跳过 | `是 / 否` |
+| 4 | **是否启用 Invocation Logging** | 推荐开启（Step 0-C 未检测到冲突时）；已有冲突则跳过 | `是 / 否` |
 | 5 | **日志保留天数**（如开启 Logging） | 支持 7 / 14 / 30 / 60 / **90** / 180 / 365 天，默认 90 | `90` |
 | 6 | **已有日志 S3 Bucket 名**（可选） | 如已有 Bucket 希望复用，填写 Bucket 名；留空则自动创建 | `my-existing-bucket` |
 
@@ -212,15 +228,15 @@ aws cloudwatch list-metrics \
 pip install -r requirements.txt
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-REGION=$(aws configure get region || echo "ap-northeast-1")
+REGION="<0-B 中确认的 Region，不要用默认值>"
 
-# 仅在 Step 0-B 确认未 bootstrap 时执行
+# 仅在 Step 0-C 确认未 bootstrap 时执行
 cdk bootstrap aws://$ACCOUNT_ID/$REGION
 
 # 部署（如用户有多个 Profile，在此加 --profile <name>）
 # 若 cdk.json 中配置了 mantle_model_ids，cdk deploy 会一并部署 BedrockMonitoringStack 和 BedrockMantleMonitoringStack 两个 Stack；
 # 未配置则只部署 BedrockMonitoringStack。
-cdk deploy --all --context account=$ACCOUNT_ID
+cdk deploy --all --context account=$ACCOUNT_ID --context region=$REGION
 ```
 
 ---
