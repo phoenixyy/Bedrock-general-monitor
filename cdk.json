@@ -21,6 +21,15 @@
     "enable_invocation_logging": true,
     "invocation_log_group_name": "/aws/bedrock/invocation-logs",
     "invocation_log_retention_days": 90,
-    "invocation_s3_bucket_name": ""
+    "invocation_s3_bucket_name": "",
+
+    "// ─── BedrockMantle 监控（可选，适用于 GPT-5.5 等 openai-compatible 端点）────────────": "",
+    "// 不填 mantle_model_ids 则不部署本 Stack，与上方 runtime 监控完全解耦": "",
+    "mantle_model_ids": [],
+    "mantle_project_ids": [],
+    "mantle_notification_email": "",
+    "mantle_client_error_threshold": 50,
+    "mantle_dashboard_name": "Bedrock-Mantle-Operations",
+    "mantle_enable_zero_traffic_alarm": false
   }
 }

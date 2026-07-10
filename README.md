@@ -91,6 +91,54 @@ cdk destroy
 
 > ⚠️ S3 Bucket 和 CloudWatch Log Group 使用 `RETAIN` 策略，`cdk destroy` 不会删除，需手动清理。
 
+---
+
+## BedrockMantle 监控（可选，独立 Stack）
+
+如果你有模型走 **`bedrock-mantle` 端点**（Responses API / Chat Completions API / Anthropic Messages API，典型代表 `openai.gpt-5.5`、`openai.gpt-5.4`），上面这套监控**完全覆盖不到**——`bedrock-mantle` 指标发布在独立的 `AWS/BedrockMantle` namespace，且指标名称、维度都跟 `AWS/Bedrock` 不同。
+
+本项目提供独立的 `BedrockMantleMonitoringStack`，与上面的 runtime 监控完全解耦（独立 SNS Topic、独立 Dashboard、独立告警），互不影响。只需在 `cdk.json` 中填写 `mantle_model_ids`（留空则该 Stack 不部署，**可同时填多个型号**）：
+
+```json
+{
+  "context": {
+    "mantle_model_ids": ["openai.gpt-5.5", "openai.gpt-5.4"],
+    "mantle_project_ids": [],
+    "mantle_notification_email": "ops@company.com",
+    "mantle_client_error_threshold": 50,
+    "mantle_dashboard_name": "Bedrock-Mantle-Operations",
+    "mantle_enable_zero_traffic_alarm": false
+  }
+}
+```
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `mantle_model_ids` | 部署本 Stack 时必填 | 走 bedrock-mantle 端点的模型 ID，可多个，如 `openai.gpt-5.5`、`openai.gpt-5.4` |
+
+**已知模型与 Region 对应关系**（截至本文档编写时，部署前建议去对应模型卡片重新确认）：
+
+| 模型 | Model ID | 支持 Region（In-Region） |
+|---|---|---|
+| GPT-5.5 | `openai.gpt-5.5` | `us-east-1`、`us-east-2` |
+| GPT-5.4 | `openai.gpt-5.4` | `us-east-1`、`us-east-2`、`us-west-2`、`us-gov-west-1`（GovCloud） |
+
+其他参数：
+| `mantle_project_ids` | 可选 | 若使用了 Bedrock Project，填写后 Dashboard 会新增按 Project+Model 的逐请求 token 百分位（p90）图表 |
+| `mantle_notification_email` | 可选 | 告警邮箱，留空则复用 `notification_email` |
+| `mantle_client_error_threshold` | 可选 | InferenceClientErrors 5 分钟窗口 Sum 阈值，默认 50 |
+| `mantle_dashboard_name` | 可选 | 默认 `Bedrock-Mantle-Operations` |
+| `mantle_enable_zero_traffic_alarm` | 可选 | 是否开启“调用掉零”告警，默认 `false`（低频调用场景开启会持续误报，只在确认应有稳定调用时开启）|
+
+**已知能力边界（AWS 现状，非本项目缺陷）**：
+- ❌ 暂无 `InvocationLatency` / `TimeToFirstToken` 等效延迟指标
+- ❌ 暂无 ServerErrors、Throttles 指标
+- ✅ 只有 `InferenceClientErrors`（4xx）可配告警
+- ✅ `Inferences`、`TotalInputTokens`、`TotalOutputTokens` 可用于 Dashboard 趋势图
+- ✅ 若使用了 Project 维度，可看按 Project+Model 的逐请求 Token p90 分布
+
+部署时 `cdk deploy --all` 会一并部署（未配置 `mantle_model_ids` 时自动跳过）。删除同样走 `cdk destroy`。
+
 ## 常见问题
 
 **Q: `cdk synth` 报错提示缺少某个模型的 quota**  
