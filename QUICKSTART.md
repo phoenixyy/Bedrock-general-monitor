@@ -181,6 +181,31 @@ cdk deploy --context account=$ACCOUNT_ID
 
 ---
 
+## Step 5（可选）：问用户是否需要同时部署 AWS DevOps Agent
+
+部署完告警+Dashboard 后（此时“发现问题”已完成，但流程止于“通知人”），主动问用户：
+
+> “是否需要同时部署 AWS DevOps Agent？部署后告警触发时会自动开始诊断根因并给出缓解方案，不用人工看日志才知道头绪。需要吗？（需注意：目前还是 preview 阶段产品，仅在部分 Region 可用）”
+
+**如果用户同意**，按以下步骤处理：
+
+1. **确认 Region 支持**：目前 AWS DevOps Agent 仅在部分 Region 可用（如 `us-east-1`）。若本项目部署 Region（即 Bedrock 监控所在 Region）不在支持列表中，告知用户只能部署到其他 Region（可能需要另外一个监控账号/Region），不要强行在不支持的 Region 部署。
+2. **确认部署范围**：本项目只包含“单账号自监控”（Agent Space + IAM Role + 当前账号关联，AWS 官方教程 Part 1）。如用户需要跨账号监控（Part 2），告知用户本项目不覆盖，需补充官方文档步骤。
+3. **修改 `cdk.json`**：将 `deploy_devops_agent` 设为 `true`，可选填写 `devops_agent_space_name`（默认 `BedrockMonitoringAgentSpace`）。
+4. **重新执行部署**（不影响已部署的 `BedrockMonitoringStack`）：
+   ```bash
+   cdk deploy --all --context account=$(aws sts get-caller-identity --query Account --output text)
+   ```
+5. **部署完告知用户**：
+   - 记录输出中的 `AgentSpaceArn`（后续跨账号扩展需要）。
+   - **明确告知用户两个边界**：
+     - DevOps Agent 现在可以自动诊断告警根因并给出缓解方案，**但不会自动改变生产基础设施/代码**——需要动手的修复方案会以 "agent-ready instructions" 形式交给 Kiro 或人工落地，不是全自动兼底。
+     - 还需到 AWS DevOps Agent 控制台/接入对应 CloudWatch 告警为观察数据源、配置 Slack/ServiceNow 等通知通道，才能形成完整闭环——CDK 本身只部署 Agent Space 基础设施，不自动完成这一步。
+
+**如果用户不需要**，保持 `deploy_devops_agent: false`（默认值）即可，不需要任何额外操作。
+
+---
+
 ## 异常处理
 
 | 问题 | 解决方法 |
@@ -190,3 +215,4 @@ cdk deploy --context account=$ACCOUNT_ID
 | Invocation Logging 部署失败（已有配置冲突） | 将 `enable_invocation_logging` 改为 `false` 重新部署，或在 Bedrock 控制台手动关闭后重试 |
 | 告警一直是 `Insufficient data` | 正常，需要有 Bedrock 调用才会产生指标数据 |
 | 收不到告警邮件 | 检查垃圾箱，找 "AWS Notification - Subscription Confirmation" 并确认 |
+| DevOps Agent「Launch via IAM」报 `AccessDenied ... aidevops:GetAgentSpace` | `DevOpsAgentRole-WebappAdmin` 的 trust policy 必须同时允许 `sts:AssumeRole` **和** `sts:TagSession`（缺 TagSession 会导致 AgentSpaceId 会话标签打不上，ABAC 条件永远不匹配）。本项目已修复并验证通过；若手动改过该角色，检查 trust policy 是否两者都有 |

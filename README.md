@@ -71,6 +71,26 @@ cdk deploy --context account=$(aws sts get-caller-identity --query Account --out
 # 部署完成后检查邮箱，确认 SNS 订阅
 ```
 
+## 可选：同时部署 AWS DevOps Agent
+
+本项目默认只部署告警 + Dashboard（“发现问题→通知人”）。如果需要告警触发后自动诊断（“发现问题→DevOps Agent 自动诊断+给方案”），在 `cdk.json` 中将 `deploy_devops_agent` 设为 `true` 即可：
+
+```json
+{
+  "context": {
+    "deploy_devops_agent": true,
+    "devops_agent_space_name": "BedrockMonitoringAgentSpace"
+  }
+}
+```
+
+重新执行 `cdk deploy --all` 会在现有 `BedrockMonitoringStack` 之外，另外部署一个独立的 `DevOpsAgentStack`（Agent Space + 对应 IAM 角色 + 当前账号关联）。两个 Stack 完全解耦，不开不影响已部署的告警/Dashboard。
+
+> ⚠️ **前提条件**：
+> - AWS DevOps Agent 目前仍为 preview 阶段产品，仅在部分 Region 可用（如 `us-east-1`），部署前确认目标 Region 已支持，否则 `cdk deploy` 会报资源类型不存在。
+> - 本 Stack 只部署“单账号自监控”（Part 1）。跨账号监控（Part 2：为服务账号部署信任角色 + 新建 source association）不在一键部署范围内，需跨账号时参考 [AWS 官方教程](https://docs.aws.amazon.com/devopsagent/latest/userguide/getting-started-with-aws-devops-agent-getting-started-with-aws-devops-agent-using-aws-cloudformation.html) Part 2 手动补充。
+> - Agent Space 部署完成后，需要到 AWS DevOps Agent 控制台/对接 CloudWatch 告警、Slack 等通知渠道，才能完成“告警→自动诊断”的闭环，CDK 本身不自动完成这一步。
+
 ## 部署内容
 
 | 资源 | 说明 |

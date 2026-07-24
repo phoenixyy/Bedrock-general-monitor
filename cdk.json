@@ -21,6 +21,10 @@
     "enable_invocation_logging": true,
     "invocation_log_group_name": "/aws/bedrock/invocation-logs",
     "invocation_log_retention_days": 90,
-    "invocation_s3_bucket_name": ""
+    "invocation_s3_bucket_name": "",
+
+    "// ─── AWS DevOps Agent（可选，默认不部署）─────────────────": "",
+    "deploy_devops_agent": false,
+    "devops_agent_space_name": "BedrockMonitoringAgentSpace"
   }
 }
