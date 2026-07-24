@@ -129,8 +129,19 @@ aws cloudwatch list-metrics \
 | 4 | **是否启用 Invocation Logging** | 推荐开启（Step 0-B 未检测到冲突时）；已有冲突则跳过 | `是 / 否` |
 | 5 | **日志保留天数**（如开启 Logging） | 支持 7 / 14 / 30 / 60 / **90** / 180 / 365 天，默认 90 | `90` |
 | 6 | **已有日志 S3 Bucket 名**（可选） | 如已有 Bucket 希望复用，填写 Bucket 名；留空则自动创建 | `my-existing-bucket` |
+| 7 | **是否同时部署 AWS DevOps Agent** | 部署后告警触发时会自动开始诊断根因并给出缓解方案，不用人工看日志才知道头绪（具体见下方详解） | `是 / 否` |
 
 > 💡 **如何查询 TPM 配额**：AWS Console → Service Quotas → Amazon Bedrock → 搜索模型名 → 找到 "Tokens per minute" 对应的值。
+
+### 关于第 7 项：是否同时部署 AWS DevOps Agent
+
+向用户提问时，递交以下信息帮其决策：
+
+> “AWS DevOps Agent 是一个可选的自动运维能力：告警触发后它会自动开始诊断根因并给出缓解方案，但不会自动改变生产基础设施/代码。目前仍为 preview 阶段产品，仅在部分 Region 可用（如 `us-east-1`、`ap-northeast-1`）。您需要吗？”
+
+- **若部分目标 Region 不在支持列表**：告知用户该能力只能部署到支持的 Region（可能需要另外一个监控账号/Region），让用户确认是否接受这个限制后再决定。
+- **若用户同意**：后面 Step 2 中把 `deploy_devops_agent` 设为 `true`，Step 3 一次 `cdk deploy --all` 一并部署完，不需要分次操作。
+- **若用户不需要**：`deploy_devops_agent` 保持默认值 `false`，不影响告警/Dashboard 部署。日后可以随时回来把这个开关改成 `true` 再重新执行一次 `cdk deploy --all` 补部署，不影响已部署的 `BedrockMonitoringStack`。
 
 ---
 
@@ -149,7 +160,9 @@ aws cloudwatch list-metrics \
     },
     "enable_invocation_logging": <true 或 false>,
     "invocation_log_retention_days": <保留天数>,
-    "invocation_s3_bucket_name": "<已有Bucket名，或留空>"
+    "invocation_s3_bucket_name": "<已有Bucket名，或留空>",
+    "deploy_devops_agent": <true 或 false，根据 Step 1 第 7 项用户的选择填写>,
+    "devops_agent_space_name": "<可选，默认 BedrockMonitoringAgentSpace>"
   }
 }
 ```
@@ -168,7 +181,9 @@ REGION=$(aws configure get region || echo "ap-northeast-1")
 cdk bootstrap aws://$ACCOUNT_ID/$REGION
 
 # 部署（如用户有多个 Profile，在此加 --profile <name>）
-cdk deploy --context account=$ACCOUNT_ID
+# --all 会包含所有已启用的 Stack：有 deploy_devops_agent=true 时自动带上 DevOpsAgentStack，
+# 没开启时等效于只部署 BedrockMonitoringStack，无需区分写两条命令。
+cdk deploy --all --context account=$ACCOUNT_ID
 ```
 
 ---
@@ -178,31 +193,11 @@ cdk deploy --context account=$ACCOUNT_ID
 1. **确认订阅邮件**：收件箱找到 "AWS Notification - Subscription Confirmation"，**必须点击确认**才能收到告警。
 2. **查看 Dashboard**：部署输出中的 `DashboardUrl` 直接点击访问。
 3. **验证告警**：CloudWatch → Alarms，状态为 `OK` 或 `Insufficient data` 均正常（有 Bedrock 调用后才产生数据）。
-
----
-
-## Step 5（可选）：问用户是否需要同时部署 AWS DevOps Agent
-
-部署完告警+Dashboard 后（此时“发现问题”已完成，但流程止于“通知人”），主动问用户：
-
-> “是否需要同时部署 AWS DevOps Agent？部署后告警触发时会自动开始诊断根因并给出缓解方案，不用人工看日志才知道头绪。需要吗？（需注意：目前还是 preview 阶段产品，仅在部分 Region 可用）”
-
-**如果用户同意**，按以下步骤处理：
-
-1. **确认 Region 支持**：目前 AWS DevOps Agent 仅在部分 Region 可用（如 `us-east-1`）。若本项目部署 Region（即 Bedrock 监控所在 Region）不在支持列表中，告知用户只能部署到其他 Region（可能需要另外一个监控账号/Region），不要强行在不支持的 Region 部署。
-2. **确认部署范围**：本项目只包含“单账号自监控”（Agent Space + IAM Role + 当前账号关联，AWS 官方教程 Part 1）。如用户需要跨账号监控（Part 2），告知用户本项目不覆盖，需补充官方文档步骤。
-3. **修改 `cdk.json`**：将 `deploy_devops_agent` 设为 `true`，可选填写 `devops_agent_space_name`（默认 `BedrockMonitoringAgentSpace`）。
-4. **重新执行部署**（不影响已部署的 `BedrockMonitoringStack`）：
-   ```bash
-   cdk deploy --all --context account=$(aws sts get-caller-identity --query Account --output text)
-   ```
-5. **部署完告知用户**：
-   - 记录输出中的 `AgentSpaceArn`（后续跨账号扩展需要）。
-   - **明确告知用户两个边界**：
-     - DevOps Agent 现在可以自动诊断告警根因并给出缓解方案，**但不会自动改变生产基础设施/代码**——需要动手的修复方案会以 "agent-ready instructions" 形式交给 Kiro 或人工落地，不是全自动兼底。
-     - 还需到 AWS DevOps Agent 控制台/接入对应 CloudWatch 告警为观察数据源、配置 Slack/ServiceNow 等通知通道，才能形成完整闭环——CDK 本身只部署 Agent Space 基础设施，不自动完成这一步。
-
-**如果用户不需要**，保持 `deploy_devops_agent: false`（默认值）即可，不需要任何额外操作。
+4. **若用户 Step 1 第 7 项选了部署 DevOps Agent**：
+   - 记录部署输出中的 `AgentSpaceArn`（日后跨账号扩展需要）。
+   - 提醒用户：还需要到 AWS DevOps Agent 控制台把对应 CloudWatch 告警接入作为观察数据源、配置 Slack/ServiceNow 等通知渠道，才能完成“告警→自动诊断”的闭环——CDK 本身只部署 Agent Space 基础设施，不自动完成这一步。
+   - 明确告知边界：DevOps Agent 现在可以自动诊断告警根因并给出缓解方案，**但不会自动改变生产基础设施/代码**——需要动手的修复方案会以 "agent-ready instructions" 形式交给 Kiro 或人工落地，不是全自动兼底。
+5. **若用户当时说不需要 DevOps Agent，事后又想要**：可以随时把 `cdk.json` 中 `deploy_devops_agent` 改为 `true`，重新执行 Step 3 的 `cdk deploy --all` 即可补上，不影响已部署的告警/Dashboard。
 
 ---
 
